@@ -1,0 +1,224 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Ken Yang"
+date: "June 1, 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part A. Overview
+
+This document is the final report for the course of Practical Machine Learning (as part of the Specialization in Data Science) jointly organized by Coursera and John's Hopkin University.
+
+The goal of this project is to predict the manner in which 6 participants did the exercise - this is the "classe" variable in the training set. This report of the project describes how the model is built, how cross validation are used, what thinking of the expected out of sample error is, and why the choices are made. Machine learning algorithms are applied to the 20 test cases available in the test data, in order to preform the prediction. It is developed in RStudio using its knitr functions to publish in html format.
+
+## Part B. Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, we use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, who were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+## Part C : Sources of Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source:
+
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. (see the section on the Weight Lifting Exercise Dataset).
+
+## Part D : Data Loading, Cleaning and Exploration
+
+We first load the R libraries that are necessary to complete data analysis and then set the seed for reproducibility.
+```{r, message=FALSE}
+# load libraries
+library(knitr)
+library(caret)
+library(rpart)
+library(gbm)
+library(randomForest)
+library(corrplot)
+library(rattle)
+
+# set the seed 
+set.seed(2468) 
+```
+
+Load and examine the two data sets: training and testing
+```{r}
+trainRaw <- read.csv('./pml-training.csv', header=T)
+validRaw <- read.csv('./pml-testing.csv', header=T)
+dim(trainRaw); dim(validRaw)
+```
+
+Remove the variables that contains missing values.
+```{r}
+trainData <- trainRaw[, colSums(is.na(trainRaw))==0 ]
+validData <- validRaw[, colSums(is.na(validRaw))==0 ]
+dim(trainData); dim(validData)
+```
+
+Remove the first seven variables as they have little impact on the outcome classe
+```{r}
+trainData_1 <- trainData[ , -c(1:7) ]
+validData_1 <- validData[ , -c(1:7) ]
+dim(trainData_1); dim(validData_1)
+```
+
+Partition the training dataset into two parts: (1) Training set (70% of the data) for the modeling process and (2) Testing set (with the remaining 30%) for cross validations;
+```{r}
+# create a partition with the training dataset for modeling & cross validation
+set.seed(2468)
+subsets <- createDataPartition( y=trainData_1$classe, p=0.7, list=FALSE )
+trainData_subset <- trainData_1[ subsets, ]
+testData_subset <- trainData_1[-subsets, ]
+dim(trainData_subset); dim(testData_subset)
+```
+ 
+Remove the variables with values near zero as they don't have so much meaning in the predictions
+```{r}
+NZV <- nearZeroVar(trainData_subset)
+trainData_subset_NZV <- trainData_subset[ ,-NZV ]
+testData_subset_NZV <- testData_subset[ ,-NZV ]
+dim(trainData_subset_NZV); dim(testData_subset_NZV)
+```
+
+After the above data cleaning, we are now using 53 variables (see below) for model fit.
+```{r}
+colnames(trainData_subset_NZV)
+```
+ 
+Correlation Analysis:: Before proceeding to the model building, we are going to perform an analysis of correlation among the variables. 
+```{r, warning=FALSE}
+corMatrix <- cor(trainData_subset_NZV[, -53])
+corrplot( corMatrix, order="FPC", method="color", type="lower", t1.cex=0.8, t1.col= rgb(0,0,0) )
+```
+
+Search for highly correlated variables with a cut off equal to 0.75 and then list them out as below:
+```{r}
+highlyCorrelated = findCorrelation(corMatrix, cutoff=0.75)
+names(trainData_subset_NZV)[highlyCorrelated]
+```
+
+## Part E : Model Building
+
+For this project, we apply the following 3 methods to fit model:
+
+1. Decision Trees
+
+2. Generalized Boosted Model
+
+3. Random Forests
+
+The best one (with higher accuracy when applied to the test data set) will be used to predict the outcome in the next part.
+
+### Part E.1 Decision trees
+
+Build model with decision tree and then plot it as dendogram
+```{r}
+modTree <- rpart(classe ~ ., data=trainData_subset_NZV, method="class")
+fancyRpartPlot(modTree)
+```
+
+Validate the model (being built with decision tree) on the test data set in order to ﬁnd out how well it performs by looking at the accuracy variable.
+```{r}
+predTree <- predict(modTree, testData_subset_NZV, type="class")
+cmTree <- confusionMatrix(predTree, factor(testData_subset_NZV$classe))
+cmTree
+```
+
+Plot the matrix result of the Decision Tree
+```{r}
+plot(cmTree$table, col=cmTree$byClass, main=paste("Decision Tree - Accuracy = ", round(cmTree$overall["Accuracy"], 4)))
+```
+
+Finding: The accuracy using Decision trees is 0.7336 (which is not high) while the out-of—sample-error is equal to 0.2664 (which is considerable).
+
+### Part E.2 : Generalized Boosted Model
+
+Build model with Generalized Boosted Model
+```{r}
+controlGBM <- trainControl(method="repeatedcv", number=5, repeats=1)
+modGBM <- train(classe~., data=trainData_subset_NZV, method="gbm", trControl=controlGBM, verbose=FALSE)
+```
+
+Validate the model (being built with Generalized Boosted Model) on test data set:
+```{r}
+predGBM <- predict(modGBM, newdata=testData_subset_NZV)
+cmGBM <- confusionMatrix(predGBM, factor(testData_subset_NZV$classe))
+cmGBM
+```
+
+Plot the matrix results of Generalized Boosted Model:
+```{r}
+plot(cmGBM$table, col=cmGBM$byClass, main=paste("GBM - Accuracy = ", round(cmGBM$overall["Accuracy"], 4)))
+```
+
+Finding: The accuracy using Generalized Boosted Model is 0.9643 (which is very high) while the out-of—sample-error is equal to 0.0357.
+
+### Part E.3 : Random Forests
+
+Build model with Random Forest:
+```{r}
+trControlRF <- trainControl(method="cv", number=3)
+modRF <- train(classe~., data=trainData_subset_NZV, method="rf", trControl=trControlRF)
+modRF$finalModel
+```
+
+Validat the model (being built with Random Forest) on test data set:
+```{r}
+predRF_test <- predict(modRF, newdata=testData_subset_NZV)
+cmRF_test <- confusionMatrix(predRF_test, factor(testData_subset_NZV$classe))
+cmRF_test
+```
+
+Plot the model being built with Random Forest:
+```{r}
+plot(modRF)
+
+plot(cmRF_test$table, col=cmRF_test$byC1ass, main=paste("Random Forest Confusion Matrix : Accuracy = ", round(cmRF_test$overall["Accuracy"], 4)))
+```
+
+Finding: The accuracy using Random Forest is 0.9947 while the out-of—sample-error is equal to 0.0053. It may be due to over-fitting.
+
+## Part F : Prediction : applying the best model to the validation data
+
+From the finding of Part D, we have:
+
+* accuracy for Decision Tree Model : 0.7336
+
+* accuracy for Generalized Boosting Model : 0.9643
+ 
+* accuracy for Random Forest Model : 0.9947
+
+Comparing the accuracy among the three models, Random Forest Model has the highest rating (i.e. 0.9947), and thus is chosen to be applied to the validation data (that comes from the file "pml-testing.csv"). 
+
+The outcomes of the prediction using Random Forest Model on the 20 test cases are shown below:
+```{r}
+results <- predict(modRF, newdata=validData_1)
+results
+```
+
+## Part G : Conclusion
+
+Based on the data available and the procedures taken above, we are really able to fit a reasonably sound model with a high degree of accuracy in predicting out of sample observations.
+
+However, during the data cleaning processes, we should point out the number of features (or variables) have been greatly reduced as follows:
+
+* 67 (= 160 - 93) variables are removed due to missing values.
+
+* 33 (= 86 - 53) variables are removed due to values near to zero.
+
+* The first 7 variables existed in data sets are removed due to it's relatively low impact.
+
+Taking a quick look, there are about about 42% (i.e. 67 out of 160 variables) of features which do not contain any value in the data sets. The percentage is quite high even though we all know that it common to have such issue in data collection process. So, it is questionable how it is accurate if the 67 features are taken into account, inspite of having random forest model with cross-validation producing a surprisingly accurate model that is sufficient for predictive analytics, 
+
+
